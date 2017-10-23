@@ -367,13 +367,13 @@ elif mode==54:
         all_genre = [i.lower().replace(" ","") for i in genre.split(",") if i]
     if season or episode:
         url = 'http://api.trakt.tv/search/show?limit=20&page=1&query=' + urllib.quote_plus(tvshowname)
-        url = '%s?action=tvshowPage&url=%s' % ("plugin://plugin.video.exodus/", urllib.quote_plus(url))
+        url = '%s?action=tvshowPage&url=%s' % ("plugin://plugin.video.covenant/", urllib.quote_plus(url))
         _lspro.pluginquerybyJSON(url)
 
     elif genre and any( i in ["movie","film"]  for i in all_genre):
         url = 'http://api.trakt.tv/search/movie?limit=20&page=1&query=' + urllib.quote_plus(tvshowname)
         #going back dont work b/c query is empty
-        url = '%s?action=moviePage&url=%s' % ("plugin://plugin.video.exodus/", urllib.quote_plus(url))
+        url = '%s?action=moviePage&url=%s' % ("plugin://plugin.video.covenant/", urllib.quote_plus(url))
         _lspro.pluginquerybyJSON(url)
     else:
        

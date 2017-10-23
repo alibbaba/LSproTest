@@ -13,15 +13,10 @@ import time
 from BeautifulSoup import BeautifulStoneSoup, BeautifulSoup, BeautifulSOAP
 import urlparse
 import datetime
-from collections import OrderedDict,Counter
 import fnmatch
 import cookielib,base64
 import difflib as df    
 import binascii
-try:
-    import pyDes
-except Exception:
-    pass
 import xml.etree.ElementTree as ET
 
 try:
@@ -35,8 +30,6 @@ import SimpleDownloader as downloader
 
 epgtimeformat2 = "%Y-%m-%d %H:%M:%S"
 epgtimeformat = "%Y%m%d%H%M%S"
-GUIDE={}
-now = datetime.datetime.now().replace(microsecond=0)
 
 g_ignoreSetResolved=['plugin.video.dramasonline','plugin.video.f4mTester','plugin.video.shahidmbcnet','plugin.video.SportsDevil','plugin.stream.vaughnlive.tv','plugin.video.ZemTV-shani']
 art_tags = ['thumbnail', 'fanart', 'poster','clearlogo','banner','clearart']
@@ -427,17 +420,18 @@ def checkfile(epgfilewithreg,timeforfileinsec):
         else:
             return False
               
-def getData(url,fanart, data=None,searchterm=None):
+def getData(url,fanart=FANART, data=None,searchterm=None):
 
   
     if "###LSPRODYNAMIC###" in url:
-        Func_in_externallink(url,libpyCode)        
+
+        Func_in_externallink(url,libpyCode,searchterm=searchterm)        
     elif "$pyFunction:" in url and not url.startswith('http'):
         if '\\'  in url:
             tmp = url.split("$pyFunction:")
-            Func_in_externallink("$pyFunction:"+tmp[1],libpyCode=tmp[0])
+            Func_in_externallink("$pyFunction:"+tmp[1],libpyCode=tmp[0],searchterm=searchterm)
         else:
-            Func_in_externallink(url,libpyCode)
+            Func_in_externallink(url,libpyCode,searchterm=searchterm)
     else:
         soup = getSoup(url,data)
         if isinstance(soup,BeautifulSOAP):
@@ -502,18 +496,21 @@ def getData(url,fanart, data=None,searchterm=None):
                                 for epg in soup("epg"):
                                         epglink= epg.get('tvgurl')
                                         
-                                        if epglink and epglink not in allsources:
+                                        if epglink :
                                             houroffset = epg.get('tvgshift') or '0'
-                                            updateafterhour = epg.get('updateafterhour','24')
-                                            _O_info = epgxml_db(epglink,houroffset=houroffset)
-                                            _O_info._update_xml()
+                                            if epglink  in allsources:
+                                                epgxml_db(epglink,houroffset)._update_xml(True)
+                                            else:
+                                                
+                                                updateafterhour = epg.get('updateafterhour','24')
+                                                epgxml_db(epglink,houroffset=houroffset)._update_xml(False)
                             else:
                                 for epg in soup("epg"):
                                     if epg.get('tvgurl'):
                                         houroffset = epg.get('tvgshift') or '0'
                                         updateafterhour = epg.get('updateafterhour','24')
-                                        _O_info = epgxml_db(epg.get('tvgurl'),houroffset=houroffset)
-                                        _O_info._update_xml()
+                                        epgxml_db(epg.get('tvgurl'),houroffset=houroffset)._update_xml(False)
+
       
                             for index,i in enumerate(soup("item")):
                                 name=getxmlname(i("title")) #channelepg
@@ -693,7 +690,18 @@ def deg(string,level=xbmc.LOGNOTICE):
         except:
             traceback.print_exc()
             pass
-
+def _excname(group_name):
+    excludegroups = ['XXX' , 'Adult' , 'Adults' , 'ADULT' , 'ADULTS' , 'adult' , 'adults' , 'Porn' , 'PORN' , 'porn' , 'Porn' , 'xxx']
+    if any ( s in group_name for s in excludegroups ) :
+        return None
+    return group_name
+def groupmatch(g_name,content):
+    gr_match= r'#EXTINF:(.*?group-title="%s".*?),(.*?)[\n\r]+([^\r\n]+)'
+    match = re.compile(gr_match %re.escape(g_name)).findall(content)
+    if match:
+        return match
+    else:
+        return    
 def parse_m3u(data, url=None, g_name=None):
     content = data.strip()
     global itemart,item_info
@@ -701,31 +709,44 @@ def parse_m3u(data, url=None, g_name=None):
         if 'group-title' in content and g_name is None :
     
             groups = re.compile('group-title=[\'"](.*?)[\'"]').findall(content)
-            if set(groups) > 2:
-                for group in set(groups):
-                    group_name = group
-                    addDir(group_name,url,2,itemart,item_info)
-                if re.search(r"^[\s]*#((?!title=).)*$", content, re.IGNORECASE | re.MULTILINE):
-                    addDir("No Group-title",url,2,itemart,item_info)
-                return    
+            nocat = "No Group-title"
         elif  g_name is None:
-            groups = re.compile(r"^[\s]*#EXTINF.*?,[\s]*([\w\s]+)[\s]*:[^/]", re.IGNORECASE | re.MULTILINE).findall(content)
-            #
-            if groups and len(set(groups)) > 2 :
-                for group in set(groups):
-                    group_name = group
-                    addDir(group_name,url,2,itemart,item_info)
-                if re.search(r"^[\s]*#((?!title=).)*$", content, re.IGNORECASE | re.MULTILINE):
-                    addDir("No category",url,2,itemart,item_info)
-                return     
+            groups = re.compile(r"^[\s]*#EXTINF.*?,[\s]*([\w\s]+)[\s]*:[^/]", re.IGNORECASE | re.MULTILINE).findall(content) 
+            nocat = "No category"
+       
+        if groups and len(set(groups)) > 2 :
+            groups =[[i,groups.count(i)] for i in set(groups)]
+            plot=",".join( [ j for j,k in groups if k <= 5])
+            if len(plot) > 0:
+                item_info["plot"] = plot
+                addDir("Other channels",url,2,itemart,item_info)
+            for group,k in groups:
+                if group and _excname( group) and k>5:
+                    item_info["plot"] = group
+                    addDir(group,url,2,itemart,item_info)
+            nogroup = re.compile(r"^[\s]*#((?!title=).)*$", re.IGNORECASE |re.MULTILINE).findall(content)[1:]
+            if nogroup:    
+                addDir(nocat,url,2,itemart,item_info)
+            return     
     if g_name:
-        if g_name == 'No Group-title':
+        match=[]
+        if g_name == "Other channels":
+            plot = xbmc.getInfoLabel('ListItem.Plot')
+            deg("plotttttttt")
+            deg(g_name)
+            for group in plot.split(","):
+                m=groupmatch(group,content)
+                if m:
+                    match.extend(m)           
+        
+        
+        
+        elif g_name == 'No Group-title':
             match = re.compile(r"^[\s]*#EXTINF(((?!group-title=).)*),(.*?)[\n\r]+([^\r\n]+)",re.IGNORECASE|re.MULTILINE).findall(content)
             match =  [(other,channel_name,stream_url) for other,o,channel_name,stream_url in match]
         elif 'group-title' in content:
-            
-            gr_match= r'#EXTINF:(.*?group-title="%s".*?),(.*?)[\n\r]+([^\r\n]+)'
-            match = re.compile(gr_match %re.escape(g_name)).findall(content)
+            match = groupmatch(g_name,content)
+
         elif g_name == 'No category':
             
             match = re.compile(r'#EXTINF:(.+?),([^:]+)[\n\r]+([^\r\n]+)',re.I).findall(content)
@@ -738,7 +759,8 @@ def parse_m3u(data, url=None, g_name=None):
     m3uepgfileorurl=addon.getSetting("m3uepgfileorurl")
     total = len(match)
     getepg= False 
-    tvgurls = re.compile(r'#EXTM3U\s*tvgurl=[\'"](.*?)[\'"]',re.IGNORECASE).findall(content)
+
+    tvgurls = re.compile(r'(tvgurl\W+[^\n#,]+)',re.IGNORECASE).findall(content)
         
     if addon.getSetting("alwaysfindepg") == 'true'and len(m3uepgfileorurl) > 0:
         tvgurls.append(m3uepgfileorurl)
@@ -747,11 +769,32 @@ def parse_m3u(data, url=None, g_name=None):
     names = [(index,i[1]) for index,i in enumerate(match)]
     if tvgurls:
         try:
-           
+            allsources = epgxml_db().getallepgsources()
+            if allsources:
+                allsources = [i[0] for i in allsources if i[0]]
+                for i in tvgurls:
+                    epglink = re_me(i,r"tvgurl\W+([^\"\']+)")
+                    if epglink :
+                        houroffset = re_me(i,r"tvgshift\W+([^\"\']+)") or 0
+                        if epglink  in allsources:
+                            epgxml_db(epglink,houroffset)._update_xml(True)
+                        else:
+                            updateafterhour = re_me(i,r"updateafterhour\W+([^\"\']+)") or 0
+                            epgxml_db(epglink,houroffset=houroffset)._update_xml(False)
+            else:
+                #if len(tvgurls) == 1:
+                    
+                for i in tvgurls:
+                    epglink = re_me(i,r"tvgurl\W+([^\"\']+)")
+                                        
+                    if epglink :
+                        houroffset = re_me(i,r"tvgshift\W+([^\"\']+)") or 0
+                        updateafterhour = re_me(i,r"updateafterhour\W+([^\"\']+)") or 0
+                        _O_info = epgxml_db(epglink,houroffset=houroffset)
+                        _O_info._update_xml()            
+    
             getepg=True
-            for i in tvgurls:
-                _O_info = epgxml_db(i)
-                _O_info._update_xml() 
+            _O_info = epgxml_db()
             m3uitems= [(m3ustream_url(match[matchindex][2],match[matchindex][0],name), m3u_iteminfo(match[matchindex][0],match[matchindex][1],name,_O_info))for matchindex,name in names]
                     
             [addLink(stream_url,stream_info[0],stream_info[1],stream_info[2]) for stream_url,stream_info in m3uitems if stream_url]
@@ -858,6 +901,8 @@ def getlogofromfolder(name,genre=None):
             if not xbmcvfs.exists(thumbnail):
                     thumbnail = icon
             return thumbnail
+        else:
+            return icon
 def getChannelItems(name,url,fanart):
         soup = getSoup(url)
         if isinstance(soup, BeautifulSOAP):
@@ -887,10 +932,17 @@ def live_tv_name(title):
     title=re.sub(r"(?is)\[/?COLOR.*?\]","",title)
     title = re.sub('&#(\d+);', '', title)
     title = re.sub('(&#[0-9]+)([^;^0-9]+)', '\\1;\\2', title)
-    title = title.replace('&quot;', '\"').replace('&amp;', '&')
+    title = title.replace('&quot;', '\"').replace('&amp;', '&').replace('.', '')
+    if ":" in title:
+        title = title.split(":",1)[1]
     #deg("removed color "+ title)
     title = title.strip()
     title = title.lower()
+    channeldisplayname=re.split(r"\||_|:",title) 
+    if len(channeldisplayname) > 1:
+        title =channeldisplayname[1].strip()
+    else:
+        title =channeldisplayname[0].strip()    
     title= title.replace("usa","")
     title= title.replace("india","")
     title= title.replace("hd","")
@@ -1309,9 +1361,10 @@ def RepeatedRegexs(regexs,url,name):
         getData('','',ln)
         xbmcplugin.endOfDirectory(int(sys.argv[1]))
     else:
-        url,setresolved = getRegexParsed(regexs, url)
+        url = getRegexParsed(regexs, url)
         #deg((repr(url),setresolved,'imhere')) 
         if url:
+            url,setresolved = url
             if '$PLAYERPROXY$=' in url:
                 url,proxy=url.split('$PLAYERPROXY$=')
                 print 'proxy',proxy
@@ -1331,7 +1384,7 @@ def RepeatedRegexs(regexs,url,name):
             else:
                 playsetresolved(url,name,setresolved,regexs)
         else:
-            xbmc.executebuiltin("XBMC.Notification(LiveStreamsPro,Failed to extract regex. - "+"this"+",4000,"+icon+")")
+            notification("LiveStreamsPro","Failed to extract regex",3000,icon)
 def getRegexParsed(regexs, url,cookieJar=None,forCookieJarOnly=False,recursiveCall=False,cachedPages={}, rawPost=False, cookie_jar_file=None):#0,1,2 = URL, regexOnly, CookieJarOnly
         if not recursiveCall:
             regexs = eval(urllib.unquote(regexs))
@@ -3454,103 +3507,6 @@ try:
 except:
     pass
 
-def search_lspro_source(source=None,searchterm="") :
-    if searchterm == "" :
-        keyboard = xbmc.Keyboard('','Search[Use one syllable only;no space]')
-        keyboard.doModal()
-        if not (keyboard.isConfirmed() == False):
-                newStr = keyboard.getText()
-                if len(newStr) == 0 :
-                    return 
-        else:
-            xbmc.log("No Search term found",xbmc.LOGNOTICE)
-            return
-        searchterm = newStr.lower().replace(' ', '')
-        changesetting = False
-        if groupm3ulinks == 'true':
-            addon.setSetting('groupm3ulinks', 'false')
-            changesetting = True
-        if addon.getSetting('donotshowbychannels') == 'false':
-            addon.setSetting('donotshowbychannels', 'true')
-            changesetting = True
-    import workers
-    progress = xbmcgui.DialogProgress()
-    progress.create('Progress', 'Creating Search')
-        
-    m3upat = re.compile(r"\s?#EXTINF:.+?,.*?%s.*?[\n\r]+[^\r\n]+" %searchterm,  re.IGNORECASE )
-        
-    link = ''
-    ALLexlink =allitems= []
-    threads = []
-    if not source:
-        s_f = os.path.join(profile,'source_file')
-        sources = json.loads(open(s_f,"r").read())
-    else:
-        sources = [source]
-    def processthreads(threads):
-        [i.start() for i in threads]
-        timeout =10
-        for i in range(0, timeout * 2):
-            progress.update(30+i,"Please Wait %s Seconds" %str(i))
-            is_alive = [x.is_alive() for x in threads]
-            if all(x == False for x in is_alive): break
-            time.sleep(0.5)
-            #[i.join() for i in threads]
-        try: progress.close()
-        except: pass        
-    def getSearchData(url):
-            print url
-            k=None
-            soup = getSoup(url)
-            #progress.update(40, "Searching URL")
-            allitem = soup("item")
-            [getItems(allitem[index], FANART) for index,i in enumerate(allitem) if i.get('title') and searchterm in i.get('title').lower().strip()]
-            exlink = soup("externallink")
-            if len(exlink) > 0:
-                allexlinks= [i.string for index,i in  enumerate(exlink) if not i.string is None and i.string.startswith('http')  ]
-                k=find_ex_links(allexlinks)
-            if k:
-                k=find_ex_links(allexlinks)
-            if k:
-                k=find_ex_links(allexlinks)
-            if k:
-                k=find_ex_links(allexlinks)          
-    def find_ex_links(links): 
-        for link in links:
-            progress.update(20, "Finding External Links")
-            soup = getSoup(link)
-            if not isinstance(soup,BeautifulSOAP):
-            
-                    matchs = m3upat.findall(soup)
-                    for match in matchs : threads.append(workers.Thread(parse_m3u, match))
-                    continue
-            allitem = soup("item")
-            progress.update(25,"Items found %s" %len(allitem))
-            [getItems(allitem[index], FANART) for index,i in enumerate(allitem) if i.get('title') and searchterm in i.get('title').lower().strip()]
-            exlink =soup('externallink')
-            progress.update(25,"processing externallink : %s" %len(exlink))
-            if len(exlink)>0:
-                return [i.string for index,i in  enumerate(exlink) if not i.string is None and i.string.startswith('http')  ]
-
-    getexitems = find_ex_links(sources)
-    if getexitems:
-    
-            ll= [i.string for index,i in  enumerate(getexitems) if not i.string is None and i.string.startswith('http')  ]
-    
-            for link in ll :threads.append(workers.Thread(getSearchData, link)) 
-            progress.update(30,"processing Threads : %s" %len(threads))
-    try: progress.close()
-    except: pass
-    #Not sure why these change dont take place
-    if changesetting:
-        addon.setSetting('groupm3ulinks', 'true')
-        addon.setSetting('donotshowbychannels', 'false')    
-    processthreads(threads)
-
-    #xbmc.log("[addon.live.streamsproSearchURL-%s]:Items found %s" %(str(url), str(len(allitems))),xbmc.LOGNOTICE)         
-    #items = [getItems(allitem[index], fanart) for index,i in enumerate(allitems[0])]
-    
-    xbmcplugin.endOfDirectory(int(sys.argv[1]))
 
 
 def starttimeofchannel(n):
@@ -3602,7 +3558,7 @@ def getepgcontent(epg,replacefile=False):
                     epgxml = os.path.join(ItsZip,epgfile)
                 elif os.path.isfile(ItsZip):
                     return ItsZip
-                
+    return epgxml            
 class urlresolvers():
     def __init__(self,url):
 
@@ -3706,7 +3662,7 @@ class urlresolvers():
         
 class epgxml_db():
     def __init__(self,epgxml='i',houroffset='0'):
-        self.source= houroffset + '_ ' +cacheKey(epgxml)
+        self.source= str(houroffset) + '_ ' +cacheKey(epgxml)
         self.channel = ''
         self.url = epgxml
         try:
@@ -3716,7 +3672,7 @@ class epgxml_db():
            
         self.now = datetime.datetime.now().replace(microsecond=0)
         self.channeldisplayname=""
-        self.houroffset = houroffset
+        self.houroffset = int(houroffset)
         self.databasePath = os.path.join(profile, 'lsproepg.db')
         self.dbcon = database.connect(self.databasePath)
         self.c = self.dbcon.cursor()  
@@ -3738,33 +3694,42 @@ class epgxml_db():
     def predefinedchannel(self):
         url='https://www.dropbox.com/s/ds9uuve6odvg0zr/ALLCHANNELS2?dl=1' 
         data=makeRequest(url) 
+        __source = "1234"
         for id,  alt_title, categories, logo, thumb, lang, source, channelsources in json.loads(data):
             self.c.execute('INSERT OR IGNORE INTO channels(id,epgid,  alt_title, categories, logo, thumb, lang, source, channelsources) VALUES( ?, ?, ?, ?, ?, ?,?,?,?)', [id, id,  alt_title, categories, logo, thumb, lang, source, channelsources]) 
         self.dbcon.commit()
         
         
-    def _update_xml(self):
-        up_source=self.c.execute('SELECT * FROM up_source WHERE source_id=?',[self.source]) 
-        up_source = up_source.fetchone()
+    def _update_xml(self,UPDATE=False):
+        if UPDATE:
+            deg("Requesting update epg source exist." + self.source)                   
+            start_date=self.c.execute("SELECT start_date from programs where source=?",[self.source])
+            start_date = start_date.fetchall()
+            if start_date:
+                start_date = sorted(start_date,reverse=True)
+                start_date = start_date[:15]
+                #deg(str(start_date))
+                #deg(str(int(time.time())))
+                n_ = [1 if (int(time.time()) + self.houroffset*60*60) >= i[0] else 0  for i in start_date ]
+                #deg(str(n_))
+                if n_.count(1) >7:
+                    deg("UPDATE Necessary")
+                    UPDATE=True
+                else:
+                    deg("UPDATE NOT Necessary")
+                    return
 
-        if up_source:
-            self.url = up_source[2]
-                               
-            #if abs(int(time.time()) - int(up_source[5])) < 60*60 or not self.updateurl :
-            return 
-        if not self.updateurl and up_source:
-            #if up_source :
-                self.url = up_source[2]
-                expire = up_source[3] #2017072014
-                last_updated = up_source[5]
-                deg(str(last_updated))
-                   
-                if abs(int(time.time()) - int(last_updated)) < 60*60 or not self.updateurl :
-                        deg("Returning from forceupdate")
-                        return
         self.pDialog = xbmcgui.DialogProgressBG()
         self.pDialog.create("Updating EPG", " EPG: %s .\nPlease Wait.." %self.url.split("/")[-1] )
         
+        chk_source = self.c.execute('SELECT channel FROM programs WHERE source=?',[self.source])
+        chk_source = chk_source.fetchone()
+        if not chk_source or len(chk_source) ==0:
+            self.pDialog.update( 15 ,"Adding Predefined Channel ")
+            xbmc.log("should see this statement once",xbmc.LOGNOTICE)
+            
+
+            self.predefinedchannel()            
         self.c.execute('DELETE FROM programs WHERE source=?',[self.source])
         #self.c.execute('DROP TABLE channels')
         self.c.execute("VACUUM")
@@ -3772,21 +3737,9 @@ class epgxml_db():
         epgxml=  getepgcontent(self.url,replacefile=True)
         
         self.pDialog.update(5, "EPG updated url %s" %epgxml)
-        if not xbmcvfs.exists(self.databasePath):
-            self.pDialog.update( 15 ,"Adding Predefined Channel ")
-            xbmc.log("should see this statement once",xbmc.LOGNOTICE)
-            
-
-            self.predefinedchannel()
         self.get_channels_db(epgxml)
-
-        #self.dbcon.commit()
-        if "whatsonindia_data.json" in self.url:
-            self.c.execute('INSERT OR IGNORE INTO up_source(source_id,title,url,expire_date,houroffset,last_updated) VALUES(?,?,?,?,?,?) ',[self.source,self.url.split("/")[-1],self.url,max(self.expire),self.houroffset,int(time.time())])         
-        
-        else:
-            self.epg_programes_todb()
-            self.c.execute('INSERT OR IGNORE INTO up_source(source_id,title,url,expire_date,houroffset,last_updated) VALUES(?,?,?,?,?,?) ',[self.source,self.url.split("/")[-1],self.url,max(self.expire),self.houroffset,int(time.time())])         
+        self.epg_programes_todb()
+        self.c.execute('INSERT OR IGNORE INTO up_source(source_id,title,url,expire_date,houroffset,last_updated) VALUES(?,?,?,?,?,?) ',[self.source,self.url.split("/")[-1],self.url,max(self.expire),self.houroffset,int(time.time())])         
         self.c.execute('DROP INDEX IF EXISTS Idx3 ')
         self.c.execute('CREATE INDEX  Idx3 ON programs(channel,start_date, end_date)')
         self.dbcon.commit()
@@ -3816,14 +3769,27 @@ class epgxml_db():
                             #print i
                             #channel= cleanname(i.get("id"),removecolorcode=True) 
                             epgid= i.get("id").decode("utf-8","ignore")
-                            channeldisplayname = i.find("display-name").text.capitalize()
-                            chexist=self.c.execute('SELECT id from channels WHERE id=? ',[channeldisplayname])
-                            chexist= chexist.fetchone()
-                            
-                            if not chexist:
-                                self.c.execute('INSERT INTO channels(id,epgid,  alt_title, categories, logo, thumb, lang, source, channelsources) VALUES( ?, ?, ?, ?, ?, ?,?,?,?)', [channeldisplayname,epgid,  live_tv_name(channeldisplayname).replace(" ", ""), "", "", getlogofromfolder(channeldisplayname).split("\\")[-1], lang,self.source,json.dumps(channelsources)])  
+                            channeldisplayname = i.find("display-name").text
+                            chname= live_tv_name(channeldisplayname)
+                            logo = i.find("icon")
+                            thumb = getlogofromfolder(chname).split("\\")[-1]
+                            if logo is None:
+                                #deg(str(logo))
+                                #logo = logo.attrib.get("src")
+                                logo = thumb
                             else:
-                                self.c.execute('UPDATE channels SET source = ? AND epgid = ? WHERE id= ?',[self.source,epgid,channeldisplayname]) 
+                                logo = logo.attrib.get("src")
+                                
+                            chexist=self.c.execute('SELECT source from channels WHERE id=? ',[chname])
+                            chexist= chexist.fetchone()
+                            deg(str(chname) + ":" + str(self.source) +  "::" +str(chexist))
+                            if chexist :
+                                chexist = str(chexist[0])
+                                if not "_" in chexist :
+                                    self.c.execute('UPDATE channels SET source = ? , epgid = ? WHERE id= ?',[self.source,epgid,channeldisplayname]) 
+
+                            else:
+                                self.c.execute('INSERT OR IGNORE INTO channels(id,epgid,  alt_title, categories, logo, thumb, lang, source, channelsources) VALUES( ?, ?, ?, ?, ?, ?,?,?,?)', [chname,epgid,  channeldisplayname, "", logo, thumb, lang,self.source,json.dumps(channelsources)])  
                         self.pDialog.update( 50 ,"Finished adding %s channels" %str(len(channels)) )
                 
             
@@ -3834,9 +3800,9 @@ class epgxml_db():
                 for channel, title, startDate, endDate, item, subTitle, imageLarge in self.process_epgxml():
                     if not title == "":
                         self.c.execute('INSERT INTO programs(channel, title, start_date, end_date, description, subTitle, image_large, source) VALUES(?, ?, ?, ?, ?, ?, ?,?)',
-                                    [channel.capitalize(), title, startDate, endDate, json.dumps(item), subTitle, imageLarge,self.source])
+                                    [channel, title, startDate, endDate, json.dumps(item), subTitle, imageLarge,self.source])
                         #self.expire.append(int(item.get("start")))
-                        self.expire.append(int(startDate))
+                        #self.expire.append(int(startDate))
                 self.dbcon.commit()
 
 
@@ -3892,8 +3858,8 @@ class epgxml_db():
                     yield (channel, title, startDate, endDate, item, subTitle, imageLarge)
     def matchChannel(self,xmlname):
         
-        xmlname = live_tv_name(xmlname).capitalize().strip()
-        self.c.execute('SELECT epgid,source FROM channels WHERE id=? ',[xmlname] )
+        xmlname = live_tv_name(xmlname).strip()
+        self.c.execute('SELECT epgid,source FROM channels WHERE id=? AND source <>?',[xmlname,"1234"] )
 
         _getnow = self.c.fetchone()
         if _getnow:
@@ -3905,9 +3871,11 @@ class epgxml_db():
                 
         else:
 
-            self.c.execute('SELECT epgid,source FROM channels WHERE id LIKE ? ', [xmlname[:3]+'%'] )
+            self.c.execute('SELECT epgid,source FROM channels WHERE id LIKE ? AND source NOT LIKE ?', [xmlname[:3]+'%',"1234"] )
 
             _getnow = self.c.fetchall()
+            if not _getnow:
+                return
             _getchannels = [(index,str(i[0]),i[1]) for index,i in enumerate(_getnow)]
             k= df.get_close_matches(xmlname.replace(" ","").lower(),[i[1].replace(" ","").lower() for i in _getchannels],cutoff=0.6)
             #deg("kkkk for k:")
@@ -3916,7 +3884,7 @@ class epgxml_db():
                 k = [index for index,i in enumerate(_getnow) if str(i[0]).replace(" ","").lower() == k[0]]
                 #deg("k has become:")
                 #deg(str(k))
-                self.channel=_getchannels[k[0]][1].capitalize()
+                self.channel=_getchannels[k[0]][1]
                 #overwrite source to channel
                 self.source =_getchannels[k[0]][2] 
 
@@ -3929,10 +3897,11 @@ class epgxml_db():
                 return          
 
     def _getCurrentProgram(self,houroffset=0):
-        self.CurrentProgramstart_date = int(time.time())+int(self.houroffset)*60*60 #forward for 10*60*60
-        self.c.execute('SELECT * FROM programs WHERE channel= ? AND source=? AND start_date <= ? AND end_date >= ?', [self.channel, self.source, self.CurrentProgramstart_date, self.CurrentProgramstart_date])
-        _getnow = self.c.fetchone()
+        self.CurrentProgramstart_date = int(time.time())   +int(self.houroffset)*60*60 #forward for 10*60*60
 
+
+        self.c.execute('SELECT * FROM programs WHERE channel= ?  AND start_date <= ? AND end_date >= ?', [self.channel,  self.CurrentProgramstart_date, self.CurrentProgramstart_date])
+        _getnow = self.c.fetchone()
         if _getnow:
             return _getnow
             #self.Programfailed += 1
@@ -3961,9 +3930,10 @@ class epgxml_db():
             self.c.execute('SELECT url FROM up_source WHERE url=? ', [self.url])
             return self.c.fetchone()
             
-        self.c.execute('SELECT url FROM up_source ', [])
-        return self.c.fetchall()
+        allsources = self.c.execute('SELECT url FROM up_source ', [])
+        allsources = allsources.fetchall()
         
+        return allsources
     def checknextprogames(self):
         if self.updateurl :
             #deg("self.updateurl")
@@ -4025,6 +3995,8 @@ class epgxml_db():
         if item_info.get("CurrentProgram"):
 
            itemart,item_info=self.processepg_item_info(name,item_info)  
+        if not itemart.get("thumb"):
+            itemart['thumb'] = getlogofromfolder(name)
         return itemart,item_info
     def onedayepg(self,name,url,houroffset=0):
         item_info={}
